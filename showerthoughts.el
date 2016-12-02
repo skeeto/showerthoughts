@@ -36,6 +36,7 @@
 ;;; Code:
 
 (require 'json)
+(require 'heap)
 (require 'cl-lib)
 (require 'avl-tree)
 
@@ -70,7 +71,7 @@
                (author (plist-get thought :author))
                (utc (plist-get thought :created_utc))
                (candidate (list score title author
-                                (if (stringp utc) 
+                                (if (stringp utc)
                                     (string-to-number utc)
                                   utc))))
           (if (= count limit)
@@ -81,6 +82,55 @@
             (avl-tree-enter thoughts candidate)
             (cl-incf count))))
       (avl-tree-flatten thoughts))))
+
+(cl-defun showerthoughts-gather-flat (file &optional (limit 10000))
+  "Return the top LIMIT thoughts from FILE."
+  (with-temp-buffer
+    (let ((json-object-type 'plist)
+          (thought nil)
+          (thoughts ()))
+      (insert-file-contents file)
+      (while (setf thought (ignore-errors (json-read)))
+        (let* ((score (plist-get thought :score))
+               (title (plist-get thought :title))
+               (author (plist-get thought :author))
+               (utc (plist-get thought :created_utc))
+               (candidate (list score title author
+                                (if (stringp utc)
+                                    (string-to-number utc)
+                                  utc))))
+          (push candidate thoughts)))
+      (cl-subseq (cl-sort thoughts #'showerthoughts-<) 0 limit))))
+
+(defun showerthoughts-> (a b)
+  (showerthoughts-< b a))
+
+(cl-defun showerthoughts-gather-heap (file &optional (limit 10000))
+  "Return the top LIMIT thoughts from FILE."
+  (with-temp-buffer
+    (let ((json-object-type 'plist)
+          (thought nil)
+          (thoughts (heap-create #'showerthoughts-> limit)))
+      (insert-file-contents file)
+      (while (setf thought (ignore-errors (json-read)))
+        (let* ((score (plist-get thought :score))
+               (title (plist-get thought :title))
+               (author (plist-get thought :author))
+               (utc (plist-get thought :created_utc))
+               (candidate (list score title author
+                                (if (stringp utc)
+                                    (string-to-number utc)
+                                  utc))))
+          (if (= (heap-size thoughts) limit)
+              (let ((last (heap-root thoughts)))
+                (when (showerthoughts-< candidate last)
+                  (heap-delete-root thoughts)
+                  (heap-add thoughts candidate)))
+            (heap-add thoughts candidate))))
+      (let ((result ()))
+        (while (not (heap-empty thoughts))
+          (push (heap-delete-root thoughts) result))
+        result))))
 
 (defun showerthoughts-write (thought)
   "Write THOUGHT to buffer, paragraph-filled and in fortune format."
@@ -107,3 +157,35 @@
 (provide 'showerthoughts)
 
 ;;; showerthoughts.el ends here
+
+(progn ;; AVL
+  (setf foo-avl nil
+        foo-sort nil
+        foo-heap nil)
+
+  (garbage-collect)
+  (setf t-avl
+        (measure-time
+          (setf foo-avl
+                (showerthoughts-gather
+                 "/tmp/Showerthoughts-2016.10.json"))))
+  ;; sort
+  (garbage-collect)
+  (setf t-sort
+        (measure-time
+          (setf foo-sort
+                (showerthoughts-gather-flat
+                 "/tmp/Showerthoughts-2016.10.json"))))
+  ;; heap
+  (garbage-collect)
+  (setf t-heap
+        (measure-time
+          (setf foo-heap
+                (showerthoughts-gather-heap
+                 "/tmp/Showerthoughts-2016.10.json")))))
+
+(list :avl t-avl
+      :sort t-sort
+      :heap t-heap)
+;; (:avl 73.95394325256348 :sort 105.06347870826721 :heap 74.4870491027832)
+;; (:avl 75.85835385322571 :sort 106.02898383140564 :heap 73.50431847572327)
